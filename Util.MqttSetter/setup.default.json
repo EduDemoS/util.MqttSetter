@@ -1,0 +1,14 @@
+{
+  "Setup": {
+    "WorkshopId": "",
+    "DevicePrefixes": [
+      "SUNFLOWER"
+    ],
+    "TeacherIds": [
+      "00"
+    ],
+    "TeamIds": [
+      1
+    ]
+  }
+}

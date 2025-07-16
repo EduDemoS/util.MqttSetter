@@ -3,6 +3,8 @@ using System.Text.Json;
 using MQTTnet;
 using Util.MqttSetter.Models;
 using Util.MqttSetter.Config;
+using System.Text.RegularExpressions;
+using MQTTnet.Protocol;
 
 namespace Util.MqttSetter
 {
@@ -12,12 +14,16 @@ namespace Util.MqttSetter
                                                             .SetBasePath(Directory.GetCurrentDirectory())
                                                             .AddJsonFile("appsettings.default.json", optional: true, reloadOnChange: true)
                                                             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                                                            .AddJsonFile("setup.default.json", optional: false, reloadOnChange: true)
+                                                            .AddJsonFile("setup.json", optional: true, reloadOnChange: true)
                                                             .Build();
         private static readonly BrokerConfig BrokerSetup = new();
+        private static readonly SettingConfig Setup = new();
 
         static Program()
         {
             config.Bind("Broker", BrokerSetup);
+            config.Bind("Setup", Setup);
         }
 
         static async Task Main(string[] args)
@@ -34,11 +40,13 @@ namespace Util.MqttSetter
 
             try
             {
+                bool state = false;
+
                 await mqttClient.ConnectAsync(options);
 
-                bool state = false;
-                List<string> teacherDevices = ["SUNFLOWERies", "SUNFLOWER00", "SUNFLOWERitq"];
-                var devices = teacherDevices.Union(GenerateDeviceList("SUNFLOWER", 1, 15));
+                var teacherDevices = BuildDeviceNames(Setup.DevicePrefixes, Setup.TeacherIds);
+                var teamDevices = BuildDeviceNames(Setup.DevicePrefixes, Setup.TeamIds);
+                var devices = teacherDevices.Union(teamDevices);
 
                 while (!Console.KeyAvailable)
                 {
@@ -61,8 +69,9 @@ namespace Util.MqttSetter
                     Mirror = false,
                     State = "off"
                 });
+
                 var testresultDone = JsonSerializer.Serialize(new int[] { 2, 2, 2, 2, 2, 2, 2, 2, 2 });
-                await SendPayloadToDevices(mqttClient, "testresult", devices, heartbeatOff);
+                await SendPayloadToDevices(mqttClient, "heartbeat", devices, heartbeatOff);
                 await SendPayloadToDevices(mqttClient, "testresult", teacherDevices, testresultDone);
 
                 await mqttClient.DisconnectAsync();
@@ -73,15 +82,34 @@ namespace Util.MqttSetter
             }
         }
 
+        private static IEnumerable<string> BuildDeviceNames(IEnumerable<string> prefixes, IEnumerable<string> ids)
+        {
+            foreach (var basename in prefixes)
+            {
+                foreach (var id in ids)
+                {
+                    if (int.TryParse(id, out var val))
+                    {
+                        yield return $"{basename}{val:D2}";
+                    }
+                    else
+                    {
+                        yield return $"{basename}{id}";
+                    }
+                }
+            }
+        }
+
         private static async Task SendPayloadToDevices(IMqttClient mqttClient, string topicName, IEnumerable<string> devices, string payload, int delayMs = 0)
         {
             foreach (var device in devices)
             {
-                var topic = $"EduDemoS/{device}/data/{topicName}";
+                string topic = BuildFullyQualifiedTopicName(Setup.WorkshopId, device, topicName);
+
                 var message = new MqttApplicationMessageBuilder()
                               .WithTopic(topic)
                               .WithPayload(payload)
-                              .WithQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.ExactlyOnce)
+                              .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.ExactlyOnce)
                               .Build();
 
                 Console.Write($"Sening {topic}: {payload}...");
@@ -92,14 +120,27 @@ namespace Util.MqttSetter
             }
         }
 
-        static List<string> GenerateDeviceList(string basename, int min, int max)
+        private static string BuildFullyQualifiedTopicName(string workshopId, string device, string topicName)
         {
-            var list = new List<string>();
-            for (int i = min; i <= max; i++)
+            var topic = $"EduDemoS/";
+            
+            // Sanitize all topic fragments
+            workshopId = SanitizeMqttTopicFragment(workshopId);
+            device = SanitizeMqttTopicFragment(device);
+            topicName = SanitizeMqttTopicFragment(topicName);
+            
+            if (!string.IsNullOrEmpty(Setup.WorkshopId))
             {
-                list.Add($"{basename}{i:D2}");
+                topic += $"{workshopId}/";
             }
-            return list;
+            topic += $"{device}/data/{topicName}";
+
+            return topic;
+        }
+
+        private static string SanitizeMqttTopicFragment(string fragment)
+        {
+            return Regex.Replace(fragment, @"[^a-zA-Z0-9_-]", "_");
         }
     }
 }
